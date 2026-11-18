@@ -27,7 +27,7 @@
   .wrap{max-width:1280px;margin:0 auto;padding:22px 16px 80px}
   header{color:#f3ead8;display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 16px;margin-bottom:14px}
   header h1{margin:0;font-size:28px;letter-spacing:.01em}
-  header .sub{color:#c9bfa9;font-size:14px}
+  header .sub{color:#c9bfa9;font-size:14px;background:none;padding:0}
 
   .bar{position:sticky;top:0;z-index:5;background:var(--mat);padding:10px 0 8px;
     box-shadow:0 8px 14px -10px rgba(0,0,0,.6)}
@@ -87,9 +87,20 @@
   .sub{background:rgba(255,255,255,.35);border-radius:3px;padding:6px 8px;font-size:13px;line-height:1.35}
   .sub .nm{font-weight:800}
   .deck{display:flex;flex-wrap:wrap;gap:4px}
-  .deck button{font:inherit;font-size:12.5px;border:1px solid var(--rule);background:rgba(255,255,255,.4);
-    border-radius:2px;padding:2px 6px;cursor:pointer;color:var(--link)}
+  .deck a{font-size:12.5px;border:1px solid var(--rule);background:rgba(255,255,255,.4);
+    border-radius:2px;padding:2px 6px;color:var(--link);text-decoration:none}
+  .deck a:hover{text-decoration:underline}
   mark{background:#f1d77a;color:inherit;border-radius:2px}
+
+  /* Every entry is a link: its name is an <a> to #tab/key, and a click anywhere on the
+     tile opens it on its own, so the address bar holds a link to just that entry. */
+  .name a{color:inherit;text-decoration:none}
+  .name a:hover{text-decoration:underline}
+  .grid:not(.one) .item{cursor:pointer}
+  .grid:not(.one) .item:hover{box-shadow:0 6px 14px rgba(0,0,0,.32),0 0 0 2px #d9b45a}
+  .grid.one{grid-template-columns:minmax(0,520px)}
+  .grid.one.wide{grid-template-columns:minmax(0,760px)}
+  .chip.go{border-color:#d9b45a;color:#d9b45a;font-weight:700}
   footer{color:#a9b8b2;font-size:12.5px;margin-top:40px;text-align:center}
   @media (max-width:520px){
     header h1{font-size:22px}
@@ -120,15 +131,45 @@ const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const cap = s => s ? s[0].toUpperCase() + s.slice(1) : s;
 let D = null;
-const state = {tab: "cards", q: "", f: {}};
+// show: the key of the one entry on screen (#cards/<key>), or null for the whole shelf.
+const state = {tab: "cards", q: "", f: {}, show: null};
+const TITLE = document.title;
 
 const TABS = [
-  {id: "cards", label: "Cards"},
-  {id: "pins", label: "Pins"},
-  {id: "enemies", label: "Enemies"},
-  {id: "warlords", label: "Warlords"},
-  {id: "keywords", label: "Keywords"},
+  {id: "cards", label: "Cards", one: "card"},
+  {id: "pins", label: "Pins", one: "pin"},
+  {id: "enemies", label: "Enemies", one: "enemy"},
+  {id: "warlords", label: "Warlords", one: "warlord"},
+  {id: "keywords", label: "Keywords", one: "keyword"},
 ];
+
+// ---- one entry per link ---------------------------------------------------------------
+// A key per entry: its name as a slug, so a shared link reads as what it shows
+// (#cards/spectral-call); the game's own id where two entries share a name. The id opens
+// the entry too (the dump's ids are the game's: Spectral Call is "ritual"), and the page
+// rewrites such a link to the name.
+const slug = s => String(s || "").toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "")
+  .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+function keyEntries() {
+  D.byKey = {};
+  for (const t of TABS) {
+    const m = D.byKey[t.id] = new Map();
+    const seen = {};
+    for (const x of D[t.id]) { const s = slug(x.name); seen[s] = (seen[s] || 0) + 1; }
+    for (const x of D[t.id]) {
+      const s = slug(x.name);
+      const base = s && seen[s] === 1 ? s : (x.id ? String(x.id) : (s || "entry"));
+      let k = base;
+      for (let n = 2; m.has(k); n++) k = base + "-" + n;
+      x._key = k;
+      m.set(k, x);
+    }
+    for (const x of D[t.id]) if (x.id && !m.has(String(x.id))) m.set(String(x.id), x);
+  }
+}
+const entryHash = (tab, x) => "#" + tab + "/" + encodeURIComponent(x._key);
+const tile = (tab, x) => `<article class="item" data-key="${esc(x._key)}">`;
+const nameLink = (tab, x, inner) => `<a href="${esc(entryHash(tab, x))}">${inner}</a>`;
 
 // ---- search ---------------------------------------------------------------------------
 // Every word must appear somewhere in the entry (name, rules, keywords, section). Quoted
@@ -139,7 +180,7 @@ function tokens(q) {
   return out;
 }
 function hayOf(x) {
-  if (!x._hay) x._hay = JSON.stringify(x, (k, v) => (k === "art" || k === "icon" || k === "_hay") ? undefined : v).toLowerCase();
+  if (!x._hay) x._hay = JSON.stringify(x, (k, v) => (k === "art" || k === "icon" || k === "_hay" || k === "_key") ? undefined : v).toLowerCase();
   return x._hay;
 }
 const matches = (x, toks) => toks.every(t => hayOf(x).includes(t));
@@ -245,9 +286,9 @@ const kws = u => (u && u.keywords || []).filter(k => k.name).map(k =>
 
 function cardHTML(c) {
   const where = c.section ? ` &middot; ${hl(c.section)}` : "";
-  return `<article class="item">
+  return `${tile("cards", c)}
     <div class="top">${artDiv(c.art)}
-      <div class="head"><div class="name">${hl(c.name)}</div>
+      <div class="head"><div class="name">${nameLink("cards", c, hl(c.name))}</div>
         <div class="meta"><span class="kind ${kindOf(c.type)}">${esc(c.type)}</span>${esc(cap(c.rarity))}${where}</div>
         ${c.path ? `<div class="tagline">${esc(c.path)} path</div>` : ""}
       </div>
@@ -259,9 +300,9 @@ function cardHTML(c) {
   </article>`;
 }
 function pinHTML(p) {
-  return `<article class="item">
+  return `${tile("pins", p)}
     <div class="top">${artDiv(p.icon)}
-      <div class="head"><div class="name">${hl(p.name)}</div>
+      <div class="head"><div class="name">${nameLink("pins", p, hl(p.name))}</div>
         <div class="meta">${hl(p.shelf)}${p.pack ? " &middot; " + hl(p.pack) : ""}</div></div></div>
     <div class="text">${hl(p.text)}</div>
     ${p.penalty ? `<div class="warn">Downside: ${hl(p.penalty)}</div>` : ""}
@@ -275,10 +316,10 @@ function enemyHTML(e) {
   const twin = e.twin ? unitSub(e.twin) : "";
   const sec = (title, body) => body ? `<h4>${title}</h4>${body}` : "";
   const list = (arr, f) => arr && arr.length ? `<div class="sublist">${arr.map(f).join("")}</div>` : "";
-  const open = tokens(state.q).length ? " open" : "";
-  return `<article class="item">
+  const open = tokens(state.q).length || state.show ? " open" : "";
+  return `${tile("enemies", e)}
     <div class="top">${artDiv(e.art, true)}
-      <div class="head"><div class="name">${hl(e.name)}</div>
+      <div class="head"><div class="name">${nameLink("enemies", e, hl(e.name))}</div>
         <div class="meta">Act ${e.act} &middot; ${esc(e.tier)} &middot; ${e.hp} HP &middot; ${e.energy} energy a round</div>
         ${e.flavor ? `<div class="flavor" style="margin-top:4px">${hl(e.flavor)}</div>` : ""}</div></div>
     <details${open}><summary>How it fights</summary>
@@ -298,17 +339,19 @@ function enemyHTML(e) {
 function deckHTML(ids) {
   const counts = {};
   for (const id of ids) counts[id] = (counts[id] || 0) + 1;
+  // Each starting card links straight to its own entry.
   return `<div class="deck">${Object.keys(counts).map(id => {
-    const n = (D.cardById[id] || {name: id}).name;
-    return `<button data-card="${esc(n)}">${counts[id] > 1 ? counts[id] + "x " : ""}${esc(n)}</button>`;
+    const c = D.byKey.cards.get(id);
+    const label = (counts[id] > 1 ? counts[id] + "x " : "") + esc(c ? c.name : id);
+    return c ? `<a href="${esc(entryHash("cards", c))}">${label}</a>` : `<span>${label}</span>`;
   }).join("")}</div>`;
 }
 function warlordHTML(w) {
   const deck = deckHTML(w.deck) + (w.deck_f && w.deck_f.length
     ? `<div class="tagline" style="margin-top:4px">${esc(w.name_f || "Second army")}:</div>` + deckHTML(w.deck_f) : "");
-  return `<article class="item">
+  return `${tile("warlords", w)}
     <div class="top">${artDiv(w.art, true)}
-      <div class="head"><div class="name">${hl(w.name)}${w.name_f ? " / " + hl(w.name_f) : ""}</div>
+      <div class="head"><div class="name">${nameLink("warlords", w, hl(w.name) + (w.name_f ? " / " + hl(w.name_f) : ""))}</div>
         <div class="meta">${hl(w.title)} &middot; ${w.hp} HP</div></div></div>
     <div class="text">${hl(w.text)}</div>
     ${w.pin ? `<div class="sub"><span class="nm">${hl(w.pin)}</span> ${hl(w.pin_text)}</div>` : ""}
@@ -316,7 +359,7 @@ function warlordHTML(w) {
     ${w.unlock ? `<div class="tagline">Unlock: ${esc(w.unlock)}</div>` : ""}
   </article>`;
 }
-const keywordHTML = k => `<article class="item"><div class="name">${hl(k.name)}</div><div class="text">${hl(k.text)}</div></article>`;
+const keywordHTML = k => `${tile("keywords", k)}<div class="name">${nameLink("keywords", k, hl(k.name))}</div><div class="text">${hl(k.text)}</div></article>`;
 const RENDER = {cards: cardHTML, pins: pinHTML, enemies: enemyHTML, warlords: warlordHTML, keywords: keywordHTML};
 
 // ---- page -----------------------------------------------------------------------------
@@ -328,19 +371,83 @@ function drawTabs() {
   }).join("");
 }
 let drawn = 0, list = [];
-function update(keepHash) {
-  const toks = tokens(state.q);
-  const gs = groupsFor(state.tab);
-  list = D[state.tab].filter(x => matches(x, toks) && passes(x, gs));
+const isWide = tab => tab === "enemies" || tab === "warlords";
+// mode: undefined rewrites the address in place (typing, filters), "push" adds a history
+// step (leaving one entry for a shelf), true leaves the address alone (it drew from it).
+function update(mode) {
+  if (state.show) showOne();
+  else {
+    document.title = TITLE;
+    const toks = tokens(state.q);
+    const gs = groupsFor(state.tab);
+    list = D[state.tab].filter(x => matches(x, toks) && passes(x, gs));
+    drawTabs();
+    drawFilters(gs);
+    $("#count").textContent = `${list.length} of ${D[state.tab].length}`;
+    const out = $("#out");
+    out.className = "grid" + (isWide(state.tab) ? " wide" : "");
+    out.innerHTML = list.length ? "" : `<div class="empty">Nothing matches. Try fewer words, or clear the filters.</div>`;
+    drawn = 0;
+    more();
+  }
+  if (mode !== true) writeHash(mode === "push");
+}
+// One entry on its own: what a shared link opens. Its address is #tab/key.
+function showOne() {
+  const t = TABS.find(t => t.id === state.tab);
+  const x = D.byKey[state.tab].get(state.show);
   drawTabs();
-  drawFilters(gs);
-  $("#count").textContent = `${list.length} of ${D[state.tab].length}`;
+  const box = $("#filters");
+  box.innerHTML = "";
+  const all = document.createElement("button");
+  all.className = "chip go";
+  all.textContent = "All " + t.label.toLowerCase();
+  all.onclick = showShelf;
+  box.appendChild(all);
+  if (x) {
+    const cp = document.createElement("button");
+    cp.className = "chip";
+    cp.textContent = "Copy link";
+    cp.onclick = () => copyLink(cp);
+    box.appendChild(cp);
+  }
+  $("#count").textContent = "";
+  list = []; drawn = 0;
   const out = $("#out");
-  out.className = "grid" + (state.tab === "enemies" || state.tab === "warlords" ? " wide" : "");
-  out.innerHTML = list.length ? "" : `<div class="empty">Nothing matches. Try fewer words, or clear the filters.</div>`;
-  drawn = 0;
-  more();
-  if (!keepHash) writeHash();
+  out.className = "grid one" + (isWide(state.tab) ? " wide" : "");
+  if (!x) {
+    document.title = TITLE;
+    const words = state.show.replace(/[-_]+/g, " ").trim();
+    const find = "#" + state.tab + "?" + new URLSearchParams({q: words});
+    out.innerHTML = `<div class="empty">No ${t.one} goes by that link any more: it may have been renamed or taken out of the game.
+      <br><a href="${esc(find)}" style="color:#d9b45a">Search the ${esc(t.label.toLowerCase())} for "${esc(words)}"</a></div>`;
+    return;
+  }
+  if (x._key !== state.show) {   // opened by the game's id: show the name in the address
+    state.show = x._key;
+    history.replaceState(null, "", hashNow());
+    lastHash = location.hash;
+  }
+  document.title = x.name + " - " + TITLE;
+  out.innerHTML = RENDER[state.tab](x);
+}
+function copyLink(btn) {
+  const done = ok => {
+    btn.textContent = ok ? "Copied" : "Copy it from the address bar";
+    setTimeout(() => { btn.textContent = "Copy link"; }, 1800);
+  };
+  if (navigator.clipboard) navigator.clipboard.writeText(location.href).then(() => done(true), () => done(false));
+  else done(false);
+}
+// "All cards": straight back to the shelf this entry was opened from (Back does the same,
+// with the search and the scroll as they were); from a shared link, the whole shelf.
+function showShelf() {
+  if (back && back.hash.split("?")[0] === "#" + state.tab) { history.back(); return; }
+  state.show = null;
+  state.q = ""; state.f = {};
+  $("#q").value = "";
+  update("push");
+  scrollTo(0, 0);
 }
 // Deal the grid in pages so a 600-card shelf doesn't stall the first paint.
 function more() {
@@ -353,51 +460,96 @@ addEventListener("scroll", () => {
   if (innerHeight + scrollY > document.body.scrollHeight - 1200) more();
 }, {passive: true});
 
-function writeHash() {
+// The address is the page's whole state: #tab?q=...&filter=... for a shelf, #tab/key for
+// one entry. lastHash is the address last drawn, so hashchange and popstate (both fire on
+// some navigations) draw it once; back is the shelf an entry was opened from.
+let lastHash = null, back = null;
+function hashNow() {
+  if (state.show) return "#" + state.tab + "/" + encodeURIComponent(state.show);
   const p = new URLSearchParams();
   if (state.q) p.set("q", state.q);
   for (const [k, s] of Object.entries(state.f)) if (s.size) p.set(k, [...s].join("|"));
-  const h = "#" + state.tab + (p.toString() ? "?" + p : "");
-  if (location.hash !== h) history.replaceState(null, "", h);
+  return "#" + state.tab + (p.toString() ? "?" + p : "");
+}
+function writeHash(push) {
+  const h = hashNow();
+  if (location.hash !== h) history[push ? "pushState" : "replaceState"](null, "", h);
+  lastHash = location.hash;
 }
 function readHash() {
   const h = location.hash.slice(1);
-  const [tab, qs] = h.split("?");
+  const qi = h.indexOf("?");
+  const path = qi < 0 ? h : h.slice(0, qi);
+  const si = path.indexOf("/");
+  const tab = si < 0 ? path : path.slice(0, si);
   if (TABS.some(t => t.id === tab)) state.tab = tab;
-  const p = new URLSearchParams(qs || "");
+  state.show = null;
+  if (si >= 0) {
+    const raw = path.slice(si + 1);
+    try { state.show = decodeURIComponent(raw); } catch (e) { state.show = raw; }
+    state.show = state.show || null;
+  }
+  const p = new URLSearchParams(qi < 0 ? "" : h.slice(qi + 1));
   state.q = p.get("q") || "";
   state.f = {};
   for (const [k, v] of p) if (k !== "q") state.f[k] = new Set(v.split("|"));
   $("#q").value = state.q;
 }
+function route() {
+  if (!D || location.hash === lastHash) return;
+  readHash();
+  update(true);
+  lastHash = location.hash;
+  if (state.show) { scrollTo(0, 0); return; }
+  // Back on a shelf: deal enough of it to stand where the reader was, then go there.
+  if (back && location.hash === back.hash) {
+    while (drawn < list.length && document.body.scrollHeight < back.y + innerHeight * 2) more();
+    scrollTo(0, back.y);
+  }
+  back = null;
+}
+addEventListener("hashchange", route);
+addEventListener("popstate", route);
 
 $("#tabs").addEventListener("click", e => {
   const b = e.target.closest("[data-tab]");
   if (!b) return;
-  state.tab = b.dataset.tab; state.f = {};
-  update(); scrollTo(0, 0);
+  const was = state.show;
+  state.tab = b.dataset.tab; state.f = {}; state.show = null;
+  update(was ? "push" : undefined); scrollTo(0, 0);
 });
+// Opening an entry is a real navigation (its name is a link, and a click anywhere else on
+// the tile follows the same address), so Back returns to the shelf.
 $("#out").addEventListener("click", e => {
-  const b = e.target.closest("[data-card]");
-  if (!b) return;
-  state.tab = "cards"; state.f = {}; state.q = '"' + b.dataset.card + '"';
-  $("#q").value = state.q; update(); scrollTo(0, 0);
+  if (e.target.closest("a[href^='#']")) {
+    if (!(e.ctrlKey || e.metaKey || e.shiftKey || e.altKey)) back = {hash: location.hash, y: scrollY};
+    return;   // the browser follows it
+  }
+  if (state.show || e.target.closest("button, summary, details, select, input")) return;
+  if (String(getSelection())) return;   // selecting text to copy, not opening
+  const it = e.target.closest(".item[data-key]");
+  if (!it) return;
+  back = {hash: location.hash, y: scrollY};
+  location.hash = "#" + state.tab + "/" + encodeURIComponent(it.dataset.key);
 });
 let qt = 0;
 $("#q").addEventListener("input", e => {
   clearTimeout(qt);
-  qt = setTimeout(() => { state.q = e.target.value.trim(); update(); }, 120);
+  qt = setTimeout(() => {
+    const was = state.show;
+    state.q = e.target.value.trim(); state.show = null;
+    update(was ? "push" : undefined);
+  }, 120);
 });
-addEventListener("hashchange", () => { readHash(); update(true); });
 
 fetch("data.json").then(r => r.json()).then(d => {
   D = d;
   D.artMap = d.artMap || {};
-  D.cardById = {};
-  for (const c of d.cards) if (!D.cardById[c.id]) D.cardById[c.id] = c;
-  $("#ver").textContent = `${d.cards.length} cards, ${d.pins.length} pins, ${d.enemies.length} enemies, ${d.warlords.length} warlords` + (d.version ? ` · game version ${d.version}` : "");
+  keyEntries();
+  $("#ver").textContent = `${d.cards.length} cards, ${d.pins.length} pins, ${d.enemies.length} enemies, ${d.warlords.length} warlords` + (d.version ? ` · game version ${d.version}` : "") + ". Click any entry for a link to it.";
   readHash();
   update(true);
+  lastHash = location.hash;
 }).catch(err => { $("#out").innerHTML = `<div class="empty">Could not load the compendium data (${esc(err.message)}).</div>`; });
 </script>
 </body>
