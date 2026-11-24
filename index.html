@@ -284,6 +284,13 @@ function stats(u, squad) {
 const kws = u => (u && u.keywords || []).filter(k => k.name).map(k =>
   `<div class="kw"><b>${hl(k.name)}</b>${k.text ? " " + hl(k.text) : ""}</div>`).join("");
 
+// An evolution card names the card it evolves from, linked to that card's own entry.
+function evolvesFrom(c) {
+  if (!c.from) return "";
+  const b = D.byKey.cards.get(String(c.from));
+  const name = b ? nameLink("cards", b, esc(b.name)) : esc(c.from);
+  return `<div class="tagline">Evolves from ${name}${c.lvl ? ` at pack level ${c.lvl}` : ""}</div>`;
+}
 function cardHTML(c) {
   const where = c.section ? ` &middot; ${hl(c.section)}` : "";
   return `${tile("cards", c)}
@@ -291,6 +298,7 @@ function cardHTML(c) {
       <div class="head"><div class="name">${nameLink("cards", c, hl(c.name))}</div>
         <div class="meta"><span class="kind ${kindOf(c.type)}">${esc(c.type)}</span>${esc(cap(c.rarity))}${where}</div>
         ${c.path ? `<div class="tagline">${esc(c.path)} path</div>` : ""}
+        ${evolvesFrom(c)}
       </div>
       <div class="cost" title="Energy cost">${c.cost < 0 ? "X" : c.cost}</div>
     </div>
