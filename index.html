@@ -15,7 +15,7 @@
     --ink:#201913; --ink-soft:#6b5c48;
     --stamp:#a83422; --crimson:#8f2b21; --crimson-lo:#6d1f18;
     --link:#1d5f8f; --rule:rgba(32,25,19,.16);
-    --summon:#4a6b3a; --spell:#2f5f8a; --power:#7a4a8a; --curse:#7d2a2a;
+    --up:#2c7a2a; --summon:#4a6b3a; --spell:#2f5f8a; --power:#7a4a8a; --curse:#7d2a2a;
   }
   *{box-sizing:border-box}
   html,body{margin:0}
@@ -72,6 +72,12 @@
   .kind.power{background:var(--power)} .kind.curse{background:var(--curse)}
   .kind.other{background:#6b5c48}
   .text{font-size:14px;line-height:1.38;white-space:pre-line;overflow-wrap:anywhere}
+  .cost.wide{width:auto;min-width:30px;padding:0 9px;border-radius:15px;display:flex;align-items:center;gap:3px}
+  .cost small{font-size:12px;font-weight:700;color:#bfe8ad}
+  .up{color:var(--up);font-weight:700}
+  del.up{text-decoration:line-through;font-weight:400}
+  .uptext{font-size:13px;color:var(--ink-soft);white-space:pre-line}
+  .uptext b{color:var(--up)}
   .stats{display:flex;flex-wrap:wrap;gap:4px 10px;font-size:13px;font-weight:700}
   .stats span b{font-weight:400;color:var(--ink-soft);margin-right:3px}
   .kw{font-size:13px;line-height:1.35}
@@ -84,6 +90,9 @@
   summary{cursor:pointer;font-weight:700;color:var(--link);font-size:14px}
   h4{margin:10px 0 4px;font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--crimson)}
   .sublist{display:grid;gap:6px}
+  .ref{display:flex;gap:8px;align-items:flex-start;margin-top:2px}
+  .ref .art{width:52px;height:52px}
+  .ref>div{min-width:0}
   .sub{background:rgba(255,255,255,.35);border-radius:3px;padding:6px 8px;font-size:13px;line-height:1.35}
   .sub .nm{font-weight:800}
   .deck{display:flex;flex-wrap:wrap;gap:4px}
@@ -274,12 +283,103 @@ function drawFilters(gs) {
 const artUrl = p => p ? (D.artMap[p] || "") : "";
 const artDiv = (p, big) => { const u = artUrl(p); return `<div class="art${big ? " big" : ""}${u ? "" : " none"}"${u ? ` style="background-image:url('${u}')"` : ""}></div>`; };
 const kindOf = t => ["summon", "spell", "power", "curse"].includes(t) ? t : "other";
-function stats(u, squad) {
+function stats(u, squad, up) {
   if (!u) return "";
-  const s = [`<span><b>HP</b>${u.hp}</span>`, `<span><b>ATK</b>${u.damage}</span>`,
-    `<span><b>Range</b>${u.melee ? "melee" : u.range}</span>`];
-  if (squad && squad > 1) s.push(`<span><b>Squad</b>x${squad}</span>`);
+  up = up || {};
+  const v = (base, k, f) => (f || String)(base) + (up[k] !== undefined ? ` <span class="up">(${(f || String)(up[k])})</span>` : "");
+  const s = [`<span><b>HP</b>${v(u.hp, "hp")}</span>`, `<span><b>ATK</b>${v(u.damage, "damage")}</span>`,
+    `<span><b>Range</b>${u.melee ? "melee" : v(u.range, "range")}</span>`];
+  if ((squad && squad > 1) || up.squad) s.push(`<span><b>Squad</b>${v(squad || 1, "squad", n => "x" + n)}</span>`);
   return `<div class="stats">${s.join("")}</div>`;
+}
+
+// ---- upgrades, the way players quote a card: "Draw 3 (4) cards" ----------------------------
+// The card's text with each change its upgrade makes in brackets after the words it replaces,
+// added words in brackets with a plus, dropped words struck through. A word-level diff of the
+// two texts; when they share too little to read that way, the upgrade gets its own line.
+// Each token is a word, a number or a mark, with the space BEFORE it; tokens compare without
+// their spaces, and the text shown keeps the upgraded card's own spacing.
+const TOK = /\s*(?:\d+(?:\.\d+)?%?|[^\W\d_]+(?:['’][^\W\d_]+)*\+?|[^\s\w])|\s+$/gu;
+const key = t => t.trim();
+function diffTokens(a, b) {
+  const n = a.length, m = b.length, L = Array.from({length: n + 1}, () => new Int16Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--)
+    L[i][j] = key(a[i]) === key(b[j]) ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const ops = [];
+  let i = 0, j = 0;
+  while (i < n || j < m) {
+    if (i < n && j < m && key(a[i]) === key(b[j])) { ops.push(["=", b[j]]); i++; j++; }
+    else if (j < m && (i >= n || L[i][j + 1] >= L[i + 1][j])) { ops.push(["+", b[j]]); j++; }
+    else { ops.push(["-", a[i]]); i++; }
+  }
+  return ops;
+}
+// A pure addition or removal can sit at several spots along the text it repeats. Move it
+// only where it then stands as a sentence of its own: "Summon 1 Ghost." added in front of
+// "Summon 1 Ghost in a random lane" is one new sentence, not a split one.
+function slideOps(ops) {
+  const k = x => key(ops[x][1]);
+  const sentenceAt = (L, R) => (L === 0 || /[.:!?]$/.test(k(L - 1)) || /^\s*\n/.test(ops[L][1]))
+    && /[.!?:]$/.test(k(R - 1)) && /[\p{L}\p{N}]/u.test(k(L));
+  for (let i = 0; i < ops.length; i++) {
+    if (ops[i][0] === "=") continue;
+    let j = i; while (j < ops.length && ops[j][0] !== "=") j++;
+    const kind = ops[i][0];
+    if (ops.slice(i, j).every(o => o[0] === kind) && !sentenceAt(i, j)) {
+      let L = i, R = j, found = false;
+      while (L > 0 && ops[L - 1][0] === "=" && k(L - 1) === k(R - 1)) {
+        ops[L - 1][0] = kind; ops[R - 1][0] = "="; L--; R--;
+        if (sentenceAt(L, R)) { found = true; break; }
+      }
+      while (!found && L < i) { ops[L][0] = "="; ops[R][0] = kind; L++; R++; }   // none: put it back
+    }
+    i = j;
+  }
+  return ops;
+}
+function upText(c) {
+  const up = c.up && c.up.text;
+  if (!up) return hl(c.text) + (c.up && c.up.note ? `<div class="uptext"><b>Upgrade:</b> ${hl(c.up.note)}</div>` : "");
+  const a = c.text.match(TOK) || [], b = up.match(TOK) || [];
+  const ops = slideOps(diffTokens(a, b));
+  // Group into runs: equal text, and change runs of (removed, added).
+  const runs = [];
+  for (const [k, t] of ops) {
+    const last = runs[runs.length - 1];
+    if (k === "=") { if (last && last.eq) last.s += t; else runs.push({eq: true, s: t}); }
+    else {
+      const r = last && !last.eq ? last : (runs.push({eq: false, del: "", add: ""}), runs[runs.length - 1]);
+      if (k === "-") r.del += t; else r.add += t;
+    }
+  }
+  // A whitespace-only equal run between two changes joins them into one change.
+  for (let x = runs.length - 2; x > 0; x--)
+    if (runs[x].eq && !runs[x].s.trim() && !runs[x - 1].eq && !runs[x + 1].eq) {
+      runs[x - 1].del += runs[x].s + runs[x + 1].del; runs[x - 1].add += runs[x].s + runs[x + 1].add;
+      runs.splice(x, 2);
+    }
+  const changes = runs.filter(r => !r.eq && (r.del.trim() || r.add.trim()));
+  const kept = runs.filter(r => r.eq).reduce((n, r) => n + r.s.replace(/\s/g, "").length, 0);
+  const total = c.text.replace(/\s/g, "").length;
+  // Inline only while it stays readable: a value swap ("3 (4)", "medium (large)"), added
+  // words, or dropped words, never two changes a word apart, never three or more rewrites.
+  const small = r => r.del.trim() && r.add.trim() && r.del.trim().split(/\s+/).length <= 2 && r.add.trim().split(/\s+/).length <= 3;
+  const rewrites = changes.filter(r => !small(r)).length;
+  let crowded = false;
+  for (let x = 1; x < runs.length - 1; x++)
+    if (runs[x].eq && !runs[x - 1].eq && !runs[x + 1].eq && !(small(runs[x - 1]) && small(runs[x + 1]))
+        && (runs[x].s.match(/[\p{L}\p{N}]+/gu) || []).length <= 1) crowded = true;
+  if (changes.length > 4 || rewrites > 2 || crowded || kept < total * 0.5)
+    return hl(c.text) + `<div class="uptext"><b>Upgraded:</b> ${hl(up)}</div>`;
+  return runs.map(r => {
+    if (r.eq) return hl(r.s);
+    const d = r.del.trim(), ad = r.add.trim();
+    const lead = (r.del || r.add).match(/^\s*/)[0], tail = (r.del || r.add).match(/\s*$/)[0];
+    if (d && ad) return `${lead}${hl(d)} <span class="up">(${hl(ad)})</span>${tail}`;
+    if (ad) return `${r.add.match(/^\s*/)[0] || (/^[,;]/.test(ad) ? " " : "")}<span class="up">(+${hl(ad.replace(/^[,;]\s*/, ""))})</span>${r.add.match(/\s*$/)[0]}`;
+    if (d) return `${lead}<del class="up">${hl(d)}</del>${tail}`;
+    return r.del || r.add;
+  }).join("");
 }
 const kws = u => (u && u.keywords || []).filter(k => k.name).map(k =>
   `<div class="kw"><b>${hl(k.name)}</b>${k.text ? " " + hl(k.text) : ""}</div>`).join("");
@@ -291,6 +391,18 @@ function evolvesFrom(c) {
   const name = b ? nameLink("cards", b, esc(b.name)) : esc(c.from);
   return `<div class="tagline">Evolves from ${name}${c.lvl ? ` at pack level ${c.lvl}` : ""}</div>`;
 }
+// The card this one makes or names, written out in full so the text says what it does
+// (Wailing Host's Wailing Spirits, Paul 2026-11-24), linked when it has an entry of its own.
+function refHTML(c) {
+  const r = c.ref;
+  if (!r) return "";
+  const own = D.byKey.cards.get(String(r.id));
+  const name = own && own !== c ? nameLink("cards", own, hl(r.name)) : `<span class="nm">${hl(r.name)}</span>`;
+  return `<div class="sub ref">${artDiv(r.art)}<div>
+    <div class="tagline">${r.how === "makes" ? "The card it gives you" : "The card it names"}</div>
+    <b>${name}</b> <span class="tagline">${esc(r.type)}, ${r.cost < 0 ? "X" : r.cost} energy</span>
+    ${r.text ? `<div>${hl(r.text)}</div>` : ""}${stats(r.unit, r.squad)}${kws(r.unit)}</div></div>`;
+}
 function cardHTML(c) {
   const where = c.section ? ` &middot; ${hl(c.section)}` : "";
   return `${tile("cards", c)}
@@ -300,10 +412,10 @@ function cardHTML(c) {
         ${c.path ? `<div class="tagline">${esc(c.path)} path</div>` : ""}
         ${evolvesFrom(c)}
       </div>
-      <div class="cost" title="Energy cost">${c.cost < 0 ? "X" : c.cost}</div>
+      <div class="cost${c.up && c.up.cost !== undefined ? " wide" : ""}" title="Energy cost${c.up && c.up.cost !== undefined ? ", upgraded in brackets" : ""}">${c.cost < 0 ? "X" : c.cost}${c.up && c.up.cost !== undefined ? `<small>(${c.up.cost < 0 ? "X" : c.up.cost})</small>` : ""}</div>
     </div>
-    ${c.text ? `<div class="text">${hl(c.text)}</div>` : ""}
-    ${stats(c.unit, c.squad)}${kws(c.unit)}
+    ${c.text ? `<div class="text">${upText(c)}</div>` : ""}
+    ${stats(c.unit, c.squad, c.up)}${kws(c.unit)}${refHTML(c)}
     ${c.flavor ? `<div class="flavor">${esc(c.flavor)}</div>` : ""}
   </article>`;
 }
