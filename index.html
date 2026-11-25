@@ -95,6 +95,8 @@
   .ref>div{min-width:0}
   .sub{background:rgba(255,255,255,.35);border-radius:3px;padding:6px 8px;font-size:13px;line-height:1.35}
   .sub .nm{font-weight:800}
+  .sub.lit{animation:lit 1.4s ease-out}
+  @keyframes lit{from{background:rgba(235,195,94,.6)}to{background:rgba(255,255,255,.35)}}
   .deck{display:flex;flex-wrap:wrap;gap:4px}
   .deck a{font-size:12.5px;border:1px solid var(--rule);background:rgba(255,255,255,.4);
     border-radius:2px;padding:2px 6px;color:var(--link);text-decoration:none}
@@ -403,6 +405,30 @@ function refHTML(c) {
     <b>${name}</b> <span class="tagline">${esc(r.type)}, ${r.cost < 0 ? "X" : r.cost} energy</span>
     ${r.text ? `<div>${hl(r.text)}</div>` : ""}${stats(r.unit, r.squad)}${kws(r.unit)}</div></div>`;
 }
+// The units a card brings in beside its own body (Fall from Grace's Fallen Angel, Paul
+// 2026-11-25), written out in full under it, and each mention of one in the card's text
+// linked to it, the way the game's card face links and previews them. The link scrolls to
+// the unit and lights it; opened in a new tab it is the card's own address.
+const unitAnchor = (c, u) => "u-" + c._key + "-" + slug(u.name);
+const reEsc = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function linkUnits(html, c) {
+  const us = (c.units || []).slice().sort((a, b) => b.name.length - a.name.length);
+  for (const u of us) {
+    // A search highlight may sit anywhere inside the name, so a <mark> may fall between letters.
+    const pat = "(?:<mark>)?" + [...esc(u.name)].map(reEsc).join("(?:</?mark>)?") + "(?:e?s)?(?:</mark>)?";
+    const re = new RegExp(`(?<![\\p{L}\\p{N}])${pat}(?![\\p{L}\\p{N}])`, "gu");
+    const a = m => `<a class="ulink" href="${esc(entryHash("cards", c))}" data-u="${esc(unitAnchor(c, u))}">${m}</a>`;
+    // Never inside a link already made (a longer name, linked first).
+    html = html.split(/(<a\b[^>]*>[\s\S]*?<\/a>)/).map((p, i) => i % 2 ? p : p.replace(re, a)).join("");
+  }
+  return html;
+}
+function unitsHTML(c) {
+  return (c.units || []).map(u => `<div class="sub ref" id="${esc(unitAnchor(c, u))}">${artDiv(u.art)}<div>
+    <div class="tagline">${esc(u.how)}</div>
+    <b>${hl(u.name)}</b>${u.category ? ` <span class="tagline">${esc(u.category)}</span>` : ""}
+    ${stats(u, u.squad)}${linkUnits(kws(u), c)}</div></div>`).join("");
+}
 function cardHTML(c) {
   const where = c.section ? ` &middot; ${hl(c.section)}` : "";
   return `${tile("cards", c)}
@@ -414,8 +440,8 @@ function cardHTML(c) {
       </div>
       <div class="cost${c.up && c.up.cost !== undefined ? " wide" : ""}" title="Energy cost${c.up && c.up.cost !== undefined ? ", upgraded in brackets" : ""}">${c.cost < 0 ? "X" : c.cost}${c.up && c.up.cost !== undefined ? `<small>(${c.up.cost < 0 ? "X" : c.up.cost})</small>` : ""}</div>
     </div>
-    ${c.text ? `<div class="text">${upText(c)}</div>` : ""}
-    ${stats(c.unit, c.squad, c.up)}${kws(c.unit)}${refHTML(c)}
+    ${c.text ? `<div class="text">${linkUnits(upText(c), c)}</div>` : ""}
+    ${stats(c.unit, c.squad, c.up)}${linkUnits(kws(c.unit), c)}${refHTML(c)}${unitsHTML(c)}
     ${c.flavor ? `<div class="flavor">${esc(c.flavor)}</div>` : ""}
   </article>`;
 }
@@ -641,6 +667,16 @@ $("#tabs").addEventListener("click", e => {
 // Opening an entry is a real navigation (its name is a link, and a click anywhere else on
 // the tile follows the same address), so Back returns to the shelf.
 $("#out").addEventListener("click", e => {
+  const ul = e.target.closest("a.ulink");
+  if (ul && !(e.ctrlKey || e.metaKey || e.shiftKey || e.altKey)) {
+    e.preventDefault();
+    const t = document.getElementById(ul.dataset.u);
+    if (t) {
+      t.scrollIntoView({behavior: "smooth", block: "nearest"});
+      t.classList.remove("lit"); void t.offsetWidth; t.classList.add("lit");
+    }
+    return;
+  }
   if (e.target.closest("a[href^='#']")) {
     if (!(e.ctrlKey || e.metaKey || e.shiftKey || e.altKey)) back = {hash: location.hash, y: scrollY};
     return;   // the browser follows it
